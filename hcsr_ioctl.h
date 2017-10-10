@@ -14,6 +14,6 @@ typedef struct _IOCTL_SETPIN
 
 typedef struct _IOCTL_SETMODE
 {
-	int mode;
-	int time;
+	int m;
+	int delta;
 }SIOCTL_SETPARAM, *PSIOCTL_SETPARAM;
