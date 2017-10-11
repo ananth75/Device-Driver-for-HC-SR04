@@ -19,6 +19,7 @@
 #define MAX_IO_COUNT        14
 int count =0;
 uint64_t tsc1=0, tsc2=0;
+struct timeval time1, time2;
 uint64_t dist_compute = 2352941;
 static int num_of_devices = 1;
 module_param(num_of_devices,int,0);
@@ -159,22 +160,35 @@ static irqreturn_t gpio_irq_handler(int irq, void *pdev_str)
     
     if (irq == gpio_to_irq(phcsr_dev_t->echo))
     {
+	do_gettimeofday(&time1);
+	
         if(curr_val == 1)
         {
             tsc1=get_rdtsc();
+            do_gettimeofday(&time1);
             printk("Value of Echo after Interrupt is 1\n");  
             irq_set_irq_type(irq, IRQ_TYPE_EDGE_FALLING);                                           //change the pin to falling edge
         }
-        else if (curr_val ==0)
+        else if (curr_val == 0)
         {  
             printk("Value of Echo after Interrupt is 0\n");  
             tsc2=   get_rdtsc();
-            dist =  ((int)(tsc2-tsc1)/(139200));                                // processor_freq * 58 = 2400 * 58= 139200 
+            do_gettimeofday(&time2);
+            unsigned long long xx = (time2.tv_sec - time1.tv_sec) * 1000000 + (time2.tv_usec - time1.tv_usec);
+            
+            printk("Value of this is tv secs %lld\n", time2.tv_sec - time1.tv_sec);
+            printk("Value of time in Seconds %lld\n", xx);
+            do_div(xx, 1000000);
+
+            printk("Value of time in Seconds %lld\n", xx);
+            dist = (int)(xx * 17000);
+
+            //dist =  ((int)(tsc2-tsc1)/(139200));                                // processor_freq * 58 = 2400 * 58= 139200 
             printk("Value of distance : %d\n",dist);
-            printk("Timstamp diffs %llu", tsc2-tsc1);
-            printk("Timestamp computed dist %llu", div64_u64((tsc2-tsc1), dist_compute)); 
+            printk("Timstamp diffs %llu\n", tsc2-tsc1);
+            printk("Timestamp computed dist %llu\n", div64_u64((tsc2-tsc1), dist_compute)); 
             printk("Value of distance : %d\n",dist);
-            //if (phcsr_dev_t->m_data->ptr)
+
             {
                 spin_lock_irqsave(&phcsr_dev_t->m_Lock, flags );
                 if(dist > max)
@@ -186,6 +200,7 @@ static irqreturn_t gpio_irq_handler(int irq, void *pdev_str)
                     min = dist;
                 }
                 curr_dist = phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].distance;
+                phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].timestamp = tsc2;
                 count = phcsr_dev_t->count;
                 curr_dist = (curr_dist * count + dist)/(count+1);
                 phcsr_dev_t->count = count+1;
@@ -266,7 +281,7 @@ static ssize_t hcsr_write(struct file *file, const char *buf,
         printk("New measurement started\n");
         while(i<m)
         {
-            hcsr_dev_t[dev_num]->measurement_ongoing==1;
+            hcsr_dev_t[dev_num]->measurement_ongoing=1;
             gpio_set_value_cansleep(trig, 0);
             gpio_set_value_cansleep(trig, 1);
             udelay(10);
@@ -281,6 +296,7 @@ static ssize_t hcsr_write(struct file *file, const char *buf,
         dist = dist*(m+2)-min - max;
         dist = (int)dist /m ; 
         hcsr_dev_t[dev_num]->m_data->hcsr_measure[hcsr_dev_t[dev_num]->m_data->tail].distance = dist;
+    hcsr_dev_t[dev_num]->measurement_ongoing = 0;
     }
     return 0; /* But we don't actually do anything with the data */
 }
@@ -457,6 +473,8 @@ static int __init misc_init(void)
         hcsr_dev_t[i]->count = 0;
         hcsr_dev_t[i]->min = INT_MAX;
         hcsr_dev_t[i]->max = 0;
+        memset(&time1, 0, sizeof(struct timeval));
+        memset(&time2, 0, sizeof(struct timeval));
     }
     return 0;
 }
