@@ -16,9 +16,10 @@
 #define MAX_NUM_DEVICES     5
 #define MINOR_NUM_BASE      10
 #define BUFFER_SIZE         5
-#define MAX_IO_COUNT	    14
+#define MAX_IO_COUNT        14
 int count =0;
 uint64_t tsc1=0, tsc2=0;
+uint64_t dist_compute = 2352941;
 static int num_of_devices = 1;
 module_param(num_of_devices,int,0);
 static int my_device_minor_num = 0;
@@ -26,6 +27,7 @@ static int my_device_minor_num = 0;
 /* Structure for holding the measurement data */
 typedef struct {
     int      distance;
+    uint64_t timestamp;
 }hcsr_measure_t;
 
 struct hcsr_pin_config_t {
@@ -70,7 +72,11 @@ struct hcsr_dev_str{
     int trigger;
     int echo;
     hcsr_buffer_t *m_data;
+    int measurement_ongoing;
     spinlock_t m_Lock;
+    int count;
+    int min;
+    int max;
 };
 
 
@@ -78,6 +84,7 @@ struct hcsr_dev_str *hcsr_dev_t[MAX_NUM_DEVICES];
 
 typedef struct hcsr_dev_str* phcsr_dev_str;
 
+#if 0
 /*Time Stamp Counter code*/
 #if defined(__i386__)
 static __inline__ unsigned long long get_rdtsc(void)
@@ -95,6 +102,20 @@ static __inline__ unsigned long long get_rdtsc(void)
 }
 #endif
 
+#endif
+/* Read the time stamp counter */
+
+static inline __attribute__((no_instrument_function)) uint64_t get_rdtsc(void)
+
+{
+
+    uint32_t high, low;
+
+    __asm__ __volatile__("rdtsc" : "=a" (low), "=d" (high));
+
+    return (((uint64_t)high) << 32) | low;
+
+}
 int hcsr_pin_input_configuration(int IO_pin) {
 
     int level_shifter_pin = mux_lookup[IO_pin].pin_level_direction.gpio_pin;
@@ -132,9 +153,9 @@ static irqreturn_t gpio_irq_handler(int irq, void *pdev_str)
     printk( "Interrupt received from irq: %d\n", irq);
     phcsr_dev_str  phcsr_dev_t = (struct hcsr_dev_str*)pdev_str;
     unsigned long flags;
-    int dist;   
+    int dist,curr_dist,count,max,min;   
     int curr_val = gpio_get_value(phcsr_dev_t->echo);
-    count++;    
+    //count++;    
     
     if (irq == gpio_to_irq(phcsr_dev_t->echo))
     {
@@ -149,9 +170,25 @@ static irqreturn_t gpio_irq_handler(int irq, void *pdev_str)
             printk("Value of Echo after Interrupt is 0\n");  
             tsc2=   get_rdtsc();
             dist =  ((int)(tsc2-tsc1)/(139200));                                // processor_freq * 58 = 2400 * 58= 139200 
+            printk("Value of distance : %d\n",dist);
+            printk("Timstamp diffs %llu", tsc2-tsc1);
+            printk("Timestamp computed dist %llu", div64_u64((tsc2-tsc1), dist_compute)); 
+            printk("Value of distance : %d\n",dist);
             //if (phcsr_dev_t->m_data->ptr)
             {
                 spin_lock_irqsave(&phcsr_dev_t->m_Lock, flags );
+                if(dist > max)
+                {
+                    max = dist;
+                }
+                else if(dist < min)
+                {
+                    min = dist;
+                }
+                curr_dist = phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].distance;
+                count = phcsr_dev_t->count;
+                curr_dist = (curr_dist * count + dist)/(count+1);
+                phcsr_dev_t->count = count+1;
                 phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].distance = dist;
                 phcsr_dev_t->m_data->tail = (phcsr_dev_t->m_data->tail + 1) % BUFFER_SIZE;
                 if(phcsr_dev_t->m_data->tail != phcsr_dev_t->m_data->head)
@@ -159,12 +196,14 @@ static irqreturn_t gpio_irq_handler(int irq, void *pdev_str)
                     phcsr_dev_t->m_data->count++;
                 }
                 //phcsr_dev_t->ongoing = 0;
+
                 spin_unlock_irqrestore(&phcsr_dev_t->m_Lock, flags);
             }
             /*if(phcsr_dev_t->state == 1)  
             {
                 up(&phcsr_dev_t->lock);
                 printk("releasing the semaphore\n");
+
                 phcsr_dev_t->state =0;
             }*/
             irq_set_irq_type(irq, IRQ_TYPE_EDGE_RISING);                //change the pin to rising edge
@@ -207,18 +246,42 @@ static int hcsr_close(struct inode *inodep, struct file *filp)
 static ssize_t hcsr_write(struct file *file, const char *buf,
                size_t len, loff_t *ppos)
 {
-    int minor_num = iminor(file->f_path.dentry->d_inode), dev_num,trig,echo;
+    int minor_num = iminor(file->f_path.dentry->d_inode), dev_num,trig,echo,m,i=0,user_in,min,max,dist,delta;
     dev_num = minor_num - MINOR_NUM_BASE ;
     printk("Yummy - I just ate %d bytes\n", len);
     trig = hcsr_dev_t[dev_num]->trigger;
     echo = hcsr_dev_t[dev_num]->echo;
-    //do{
-        gpio_set_value_cansleep(trig, 0);
-        gpio_set_value_cansleep(trig, 1);
-        udelay(10);
-        gpio_set_value_cansleep(trig, 0);                                    //make the trigger pin low
-        //mdelay(pshcsr_dev_obj->time);                                        //in the user space get the frequecy convert it into time for kenel space usage
-    //}while(!kthread_should_stop());    return 0;
+    m = hcsr_dev_t[dev_num]->m;
+    delta = hcsr_dev_t[dev_num]->delta;
+    memset(&user_in, 0, sizeof(int));
+    if (copy_from_user(&user_in, buf, len))
+        return -EFAULT;
+    if(hcsr_dev_t[dev_num]->measurement_ongoing==1)
+    {
+        printk("There is an ongoing measurement\n");
+        return -EINVAL;
+    }
+    else
+    {
+        printk("New measurement started\n");
+        while(i<m)
+        {
+            hcsr_dev_t[dev_num]->measurement_ongoing==1;
+            gpio_set_value_cansleep(trig, 0);
+            gpio_set_value_cansleep(trig, 1);
+            udelay(10);
+            gpio_set_value_cansleep(trig, 0);                                    //make the trigger pin low
+            mdelay(delta);                                                      //in the user space get the frequecy convert it into time for kenel space usage
+            i++;
+        }
+        hcsr_dev_t[dev_num]->count = 0;
+        min = hcsr_dev_t[dev_num]->min;
+        max = hcsr_dev_t[dev_num]->max;
+        dist = hcsr_dev_t[dev_num]->m_data->hcsr_measure[hcsr_dev_t[dev_num]->m_data->tail].distance;
+        dist = dist*(m+2)-min - max;
+        dist = (int)dist /m ; 
+        hcsr_dev_t[dev_num]->m_data->hcsr_measure[hcsr_dev_t[dev_num]->m_data->tail].distance = dist;
+    }
     return 0; /* But we don't actually do anything with the data */
 }
 
@@ -387,7 +450,13 @@ static int __init misc_init(void)
             printk("BAD kmalloc in per device struct \n");
             return -ENOMEM;
         }
-        hcsr_dev_t[i]->m_data->head = hcsr_dev_t[i]->m_data->tail = hcsr_dev_t[i]->m_data->count =0;
+        hcsr_dev_t[i]->m_data->head = 0;
+        hcsr_dev_t[i]->m_data->tail = 0;
+        hcsr_dev_t[i]->m_data->count =0;
+        hcsr_dev_t[i]->measurement_ongoing = 0;
+        hcsr_dev_t[i]->count = 0;
+        hcsr_dev_t[i]->min = INT_MAX;
+        hcsr_dev_t[i]->max = 0;
     }
     return 0;
 }

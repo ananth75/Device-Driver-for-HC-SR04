@@ -82,6 +82,7 @@ int main()
 		printf("hcsr1 device is opened\n");
 	}
 	hcsr_set_pins(fd, 0, 1);
+	hcsr_set_params(fd,10,300);
 	write(fd,&m,sizeof(int) );
 //	read(fd,&pinconf,sizeof(SIOCTL_PINCONG));
 	return 0;
