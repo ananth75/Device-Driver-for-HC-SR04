@@ -19,7 +19,7 @@
 #define DRIVER_NAME "HCSR_of_driver"
 #define DEVICE_NAME1 "HCSR_1"
 #define DEVICE_NAME2 "HCSR_2"
-
+#define MAX_IO_COUNT 14
 
 #ifndef __SAMPLE_PLATFORM_H__
 #define __SAMPLE_PLATFORM_H__
@@ -66,6 +66,8 @@ struct HCSR_DEV_OBJ
 	struct list_head device_entry;
 	struct task_struct *task;
 	struct HCSR_DEV_OBJ *next;
+	uint64_t tsc1 ;
+	uint64_t tsc2 ;
 } *PPSHCSR_DEV_OBJ;
 
 //typedef struct HCSR_DEV_OBJ SHCSR_DEV_OBJ;
