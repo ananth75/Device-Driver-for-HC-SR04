@@ -130,7 +130,6 @@ static ssize_t echo_store(struct device *dev,
 	gpio_request(pphcsr_dev_str_obj->echo, "sysfs");        
 	gpio_direction_input(pphcsr_dev_str_obj->echo);
 	printk("Echo pin direction has been set as input\n");	
-	//r_int_config(pshcsr_dev_obj->echo, (void*)pshcsr_dev_obj);
 	return count;
 }
 /*
@@ -172,33 +171,55 @@ static int hcsr_open(struct inode *inode, struct file *file)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-static irqreturn_t r_irq_handler(int irq, void *dev_id)
+static irqreturn_t gpio_irq_handler(int irq, void *dev_id)
 {
-	phcsr_dev_str pphcsr_dev_str = (phcsr_dev_str)dev_id;	
-	int check = gpio_get_value(pphcsr_dev_str->echo);
+	phcsr_dev_str phcsr_dev_t = (phcsr_dev_str)dev_id;	
+	int check = gpio_get_value(phcsr_dev_t->echo);
 	printk("the gpio get value is %d", check);
 	printk("INTERRUPT HANDLER HERE\n");	
-	printk( "interrupt received (irq: %d)\n", irq);	
-	{
-		if (check ==0)
-		{  
-	        	printk("gpio pin is low\n");  
-	 		tsc2=get_tsc();
-			printk("TSC2 = %llu\n",tsc2);
-			dist =  ((int)(tsc2-tsc1)/(139200)); //
-			printk("the distance is %d",dist);					
-			
-
-			irq_set_irq_type(irq, IRQ_TYPE_EDGE_RISING);			
-		}
-       		else
-		{
-			tsc1=get_tsc();
-			printk("TSC1 = %llu\n",tsc1);
-	    		printk("gpio pin is high\n");  
-			irq_set_irq_type(irq, IRQ_TYPE_EDGE_FALLING);											
+	printk( "interrupt received (irq: %d)\n", irq);
 	
-		}
+	if (check ==0)
+	{  
+        printk("gpio pin is low\n");  
+ 		tsc2=get_tsc();
+		printk("TSC2 = %llu\n",tsc2);
+		dist =  ((int)(tsc2-tsc1)/(139200)); //
+		printk("the distance is %d",dist);					
+
+		spin_lock_irqsave(&phcsr_dev_t->m_Lock, flags );
+        if(dist > max)
+        {
+            max = dist;
+        }
+        else if(dist < min)
+        {
+            min = dist;
+        }
+        curr_dist = phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].distance;
+        phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].timestamp = tsc2;
+        count = phcsr_dev_t->count;
+        curr_dist = (curr_dist * count + dist)/(count+1);
+        phcsr_dev_t->count = count+1;
+        phcsr_dev_t->m_data->hcsr_measure[phcsr_dev_t->m_data->tail].distance = dist;
+        phcsr_dev_t->m_data->tail = (phcsr_dev_t->m_data->tail + 1) % BUFFER_SIZE;
+        if(phcsr_dev_t->m_data->tail != phcsr_dev_t->m_data->head)
+        {
+            phcsr_dev_t->m_data->count++;
+        }
+        //phcsr_dev_t->ongoing = 0;
+
+        spin_unlock_irqrestore(&phcsr_dev_t->m_Lock, flags);
+
+		irq_set_irq_type(irq, IRQ_TYPE_EDGE_RISING);			
+	}
+   	else
+	{
+		tsc1=get_tsc();
+		printk("TSC1 = %llu\n",tsc1);
+    	printk("Value of Echo after Interrupt is 1\n");  
+		irq_set_irq_type(irq, IRQ_TYPE_EDGE_FALLING);											
+
 	}
 	return IRQ_HANDLED;  
 }
@@ -208,19 +229,20 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id)
 /*CONFIG*/
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-void r_int_config(int int_gpio, void* handle) 
+void config_interrupt(int gpio_pin, void* handle) 
 {	
 	int return_val,irq_any_gpio;
 	phcsr_dev_str pp = (phcsr_dev_str)handle;
-	printk("Entered r_int_config");
-	if ( (irq_any_gpio = gpio_to_irq(int_gpio)) < 0 ) 
+	printk("Entered config_interrupt");
+	if ( (irq_any_gpio = gpio_to_irq(gpio_pin)) < 0 ) 
 	{
 		printk("GPIO to IRQ mapping failure %s\n",GPIO_INT_NAME );
       		return;
    	}
    	printk(KERN_NOTICE "Mapped int %d\n", irq_any_gpio);
-	return_val = request_irq(irq_any_gpio,(irq_handler_t ) r_irq_handler, IRQF_TRIGGER_RISING , GPIO_INT_NAME, (void*)pp);
-	printk("return value of r_int_config is %d", return_val);
+
+	return_val = request_irq(irq_any_gpio,(irq_handler_t ) gpio_irq_handler, IRQF_TRIGGER_RISING , "sensor_irq", (void*)pp);
+	printk("return value of config_interrupt is %d", return_val);
 	if (return_val != 0)
    	{
      		printk("Irq Request failure\n");
@@ -249,7 +271,7 @@ ssize_t hcsr_write(struct file *file, const char *buf,
 	udelay(10);
 	gpio_set_value_cansleep(pphcsr_dev_str_obj->trigger, 0);
     mdelay(200);
-	r_int_config(pphcsr_dev_str_obj->echo, (void*)pphcsr_dev_str_obj);
+	config_interrupt(pphcsr_dev_str_obj->echo, (void*)pphcsr_dev_str_obj);
 	gpio_set_value_cansleep(pphcsr_dev_str_obj->trigger, 0);
 	gpio_set_value_cansleep(pphcsr_dev_str_obj->trigger, 1);
 	udelay(10);

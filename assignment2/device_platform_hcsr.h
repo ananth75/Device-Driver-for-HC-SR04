@@ -57,7 +57,7 @@ struct HCSR_DEV_OBJ
 	int thread_state;
 	int trigger;
 	int echo;
-	spinlock_t my_lock;
+	spinlock_t m_Lock;
 	int ongoing;
 	int distance[100];
 	int index;
