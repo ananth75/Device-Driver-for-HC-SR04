@@ -2,13 +2,13 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/cdev.h>
-#include <asm/uaccess.h>
 #include <linux/device.h>
 #include <linux/sysfs.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
 #include <linux/miscdevice.h>
+#include <linux/cdev.h>
+#include <asm/uaccess.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/delay.h>
@@ -25,24 +25,24 @@
 #define __SAMPLE_PLATFORM_H__
 
 struct HCSR_chip {
-		char 			*name;
-		int			dev_no;
+		char 	*name;
+		int		dev_no;
 		struct platform_device 	plf_dev;
 }*PHCSR_chip;
 
-/*Timestamp*/
+/*Measurement*/
 typedef struct {
+	int distance;	
 	uint64_t TSC;
-	int distance;
 }hcsr_measure_t;
 
 /*FIFO buffer structure*/
-typedef struct fifo {
-     hcsr_measure_t *ptym;
+typedef struct shcsr_buffer {
+     hcsr_measure_t *pdata;
+     int size;     
      int head;
      int tail;
-     int size;
-} fifo_t;
+} pshcsr_buffer;
 
 /*per device structure*/
 struct HCSR_DEV_OBJ 
@@ -52,11 +52,11 @@ struct HCSR_DEV_OBJ
 	int state;
 	int samples;
 	int time;
+	pshcsr_buffer *pshcsr_buffer_obj;
 	int dev_num;
-	struct fifo *pfifo_t;
 	int thread_state;
-	int trigger_pin;
-	int echo_pin;
+	int trigger;
+	int echo;
 	spinlock_t my_lock;
 	int ongoing;
 	int distance[100];
